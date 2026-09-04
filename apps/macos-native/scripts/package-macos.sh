@@ -77,19 +77,23 @@ layout_dmg_window() {
     mkdir -p "$volume/.background"
     cp "$ROOT_DIR/Assets/dmg-background.png" "$volume/.background/background.png"
     SetFile -a V "$volume/.background" 2>/dev/null || true
+    # Path bar must be forced off: it is NOT stored in .DS_Store, so the
+    # viewer's Finder prefs otherwise steal vertical chrome and force a
+    # scrollbar. Bounds are written twice — CI/macOS often drops the first
+    # set bounds (v0.1.36 shipped WindowBounds 920x464 instead of 660x530).
     osascript <<EOF >/dev/null 2>&1 || return 0
 tell application "Finder"
     open POSIX file "$volume"
+    delay 0.5
     set dmgWindow to Finder window 1
     set current view of dmgWindow to icon view
     set toolbar visible of dmgWindow to false
+    set pathbar visible of dmgWindow to false
     -- Counter-intuitive but verified: hiding the status bar leaves a white
     -- filler strip on current macOS, while showing it renders fully dark.
     set statusbar visible of dmgWindow to true
-    -- Outer 530pt: measured chrome (title + path + status bars) is ~90pt, so
-    -- content lands at exactly the 440pt art height — no white default view
-    -- background below the art, no clipped captions. Art carries a 30pt
-    -- seamless gradient footer as insurance for other macOS chrome sizes.
+    -- Outer 530pt with path bar off: title + status ≈ chrome; 470pt art fills
+    -- the content area (30pt gradient footer absorbs minor chrome variance).
     set bounds of dmgWindow to {100, 100, 760, 630}
     set iconViewOpts to icon view options of dmgWindow
     set arrangement of iconViewOpts to not arranged
@@ -101,7 +105,10 @@ tell application "Finder"
     set position of item "Metria.app" of dmgWindow to {170, 332}
     set position of item "Applications" of dmgWindow to {490, 332}
     set position of item ".background" of dmgWindow to {1000, 1000}
-    delay 2
+    delay 1
+    set pathbar visible of dmgWindow to false
+    set bounds of dmgWindow to {100, 100, 760, 630}
+    delay 1
     close dmgWindow
 end tell
 EOF
