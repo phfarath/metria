@@ -2766,7 +2766,7 @@ extension NSMenu {
         let menu = NSMenu()
         menu.delegate = self
         let onItem = menu.addItem(
-            withTitle: String(localized: "On"), action: #selector(soundAlertsOn), keyEquivalent: "")
+            withTitle: String(localized: "Unmuted"), action: #selector(soundAlertsOn), keyEquivalent: "")
         onItem.target = self
         let muteHourItem = menu.addItem(
             withTitle: String(localized: "Mute 1 Hour"), action: #selector(muteSoundAlertsForOneHour),
@@ -2781,12 +2781,18 @@ extension NSMenu {
     }
 
     private func updateSoundAlertsMenuStates(_ menu: NSMenu) {
+        // With the master switch off nothing here can produce sound, so no row may claim
+        // to be active: disable all of them and clear every checkmark.
+        let enabled = soundAlerter.isEnabled
         let muted = soundAlerter.isMuted
         for item in menu.items {
             switch item.action {
-            case #selector(soundAlertsOn): item.state = muted ? .off : .on
+            case #selector(soundAlertsOn):
+                item.state = enabled && !muted ? .on : .off
+                item.isEnabled = enabled
             case #selector(muteSoundAlertsForOneHour), #selector(muteSoundAlertsUntilTomorrow):
-                item.state = muted ? .on : .off
+                item.state = enabled && muted ? .on : .off
+                item.isEnabled = enabled
             default: break
             }
         }

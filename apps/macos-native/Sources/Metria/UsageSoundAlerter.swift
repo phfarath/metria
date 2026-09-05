@@ -64,6 +64,10 @@ final class UsageSoundAlerter {
             }
         }
 
+        var isEnabled: Bool {
+            UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
+        }
+
         var threshold: Double {
             Double(UserDefaults.standard.object(forKey: thresholdKey) as? Int ?? fallbackThreshold)
         }
@@ -71,6 +75,9 @@ final class UsageSoundAlerter {
 
     private var lastPercent: [ProviderKind: Double] = [:]
     private var fired: Set<FiredKey> = []
+    /// Crossings that happened while muted or with an inactive session, waiting for the
+    /// first tick on which they may sound.
+    private var pending: Set<FiredKey> = []
     private var isSessionActive = true
     private var sessionObservers: [NSObjectProtocol] = []
     /// NSSound plays asynchronously; keep the last one alive until it finishes.
@@ -100,6 +107,9 @@ final class UsageSoundAlerter {
 
     /// Called on every `UsageStore.providers` publish. The first snapshot only records a
     /// baseline; later snapshots fire at most one sound for the highest upward crossing.
+    /// Crossings seen while alerts are muted or the login session is inactive are deferred
+    /// and played on the first tick after the suppressor clears; crossings seen while the
+    /// feature or the level is disabled are discarded.
     func process(_ providers: [ProviderUsage]) {
         var candidates: [(kind: ProviderKind, level: Level)] = []
         var current: [ProviderKind: Double] = [:]
@@ -116,30 +126,57 @@ final class UsageSoundAlerter {
                 if previous < level.threshold && percent >= level.threshold {
                     if !fired.contains(key) {
                         fired.insert(key)
-                        candidates.append((provider.kind, level))
+                        if level.isEnabled { candidates.append((provider.kind, level)) }
                     }
                 } else if previous >= level.threshold && percent < level.threshold {
-                    // Re-arm: the level may fire again on the next upward crossing.
+                    // Re-arm: the level may fire again on the next upward crossing. A
+                    // deferred alert for this level is stale now — the reset itself told
+                    // that story — so drop it along with the fired marker.
                     fired.remove(key)
+                    pending.remove(key)
                 }
             }
         }
         lastPercent = current
 
+        guard isEnabled else {
+            pending.removeAll()
+            return
+        }
+
+        // Hold crossings that cannot sound yet instead of consuming them silently.
+        guard isSessionActive, !isMuted else {
+            for candidate in candidates {
+                pending.insert(FiredKey(kind: candidate.kind, level: candidate.level))
+            }
+            return
+        }
+
+        var deliverable = candidates
+        for key in pending { deliverable.append((key.kind, key.level)) }
+
         // At most one sound per refresh tick, for the most severe crossing.
-        let best = candidates.reduce(into: nil as (kind: ProviderKind, level: Level)?) { best, candidate in
+        let best = deliverable.reduce(into: nil as (kind: ProviderKind, level: Level)?) { best, candidate in
             if best == nil || candidate.level.rawValue > best!.level.rawValue { best = candidate }
         }
         guard let best else { return }
+        // One beep covers the whole suppressed batch.
+        pending.removeAll()
         play(level: best.level)
     }
 
     /// Called when thresholds change in Settings so every level can fire again.
     func settingsDidChange() {
         fired.removeAll()
+        pending.removeAll()
     }
 
     // MARK: Mute
+
+    /// Whether the master switch in Settings is on.
+    var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? false
+    }
 
     var isMuted: Bool {
         mutedUntil > Date().timeIntervalSince1970
