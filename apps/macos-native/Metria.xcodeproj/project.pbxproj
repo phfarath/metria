@@ -27,6 +27,7 @@
 		B0D16525171231FFE5C69C84 /* OpenCodeGoProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 488A30C52B2A951130A87634 /* OpenCodeGoProvider.swift */; };
 		BCAAA4FF3E584906BD4F3006 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F76937A0473449017F3EB57 /* OnboardingView.swift */; };
 		BD14854124859D3F61FFB61D /* AntigravityProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 358AA6325C40633CC548F9A3 /* AntigravityProvider.swift */; };
+		C32F260FF0C2A61FE2F5538B /* UsageSoundAlerter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A2DCB6549B42AB4A6EBCF0 /* UsageSoundAlerter.swift */; };
 		C60A0D354E8CDD43466B3457 /* CursorStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2144FE93ADD1A194EEA0D854 /* CursorStateStore.swift */; };
 		E87CBB5215F9C3C201D860CE /* UsageSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C81534D399ED080DD3983A /* UsageSnapshot.swift */; };
 		EF5641DDF417468BFB615AAD /* ClaudeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF582539BF3108580AC1F4FC /* ClaudeProvider.swift */; };
@@ -64,6 +65,7 @@
 		17B8670774860D40198385E3 /* PairingSecret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingSecret.swift; sourceTree = "<group>"; };
 		18B16A90CF8351DF99C63A8A /* LocalNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetwork.swift; sourceTree = "<group>"; };
 		2144FE93ADD1A194EEA0D854 /* CursorStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorStateStore.swift; sourceTree = "<group>"; };
+		28A2DCB6549B42AB4A6EBCF0 /* UsageSoundAlerter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageSoundAlerter.swift; sourceTree = "<group>"; };
 		329ED075E7D446A1AB88C85C /* CursorProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorProvider.swift; sourceTree = "<group>"; };
 		358AA6325C40633CC548F9A3 /* AntigravityProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityProvider.swift; sourceTree = "<group>"; };
 		36216E6ACB911FA08CA36234 /* Updater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Updater.swift; sourceTree = "<group>"; };
@@ -111,6 +113,7 @@
 				5F76937A0473449017F3EB57 /* OnboardingView.swift */,
 				EB5708106721FFBC18754EDD /* ProviderActivityMonitor.swift */,
 				36216E6ACB911FA08CA36234 /* Updater.swift */,
+				28A2DCB6549B42AB4A6EBCF0 /* UsageSoundAlerter.swift */,
 				5B52A35A5B1800D8DF53A0E9 /* Providers */,
 			);
 			path = Metria;
@@ -313,6 +316,7 @@
 				9CC880BFC528518A30EFE40A /* ProviderKind+Presentation.swift in Sources */,
 				9401FE6A4D61FC25C4CADA12 /* ProviderRegistry.swift in Sources */,
 				636C3963D32BD250319A58EF /* Updater.swift in Sources */,
+				C32F260FF0C2A61FE2F5538B /* UsageSoundAlerter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

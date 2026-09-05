@@ -6,6 +6,7 @@ import Foundation
 import MetriaCore
 import ServiceManagement
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Stores the pairing master secret in the macOS Keychain. The secret never leaves the
 /// Mac in plaintext: the PWA only ever receives it via the QR code or 12-word phrase,
@@ -1684,6 +1685,12 @@ struct SettingsView: View {
     let onChangeMenuBarAlertColors: (Bool) -> Void
     @AppStorage("showMenuBarProviderNames") private var showMenuBarProviderNames = true
     let onChangeMenuBarProviderNames: (Bool) -> Void
+    @AppStorage("soundAlertsEnabled") private var soundAlertsEnabled = false
+    @AppStorage("soundAlertCautionEnabled") private var soundAlertCautionEnabled = true
+    @AppStorage("soundAlertWarningEnabled") private var soundAlertWarningEnabled = true
+    @AppStorage("soundAlertCriticalEnabled") private var soundAlertCriticalEnabled = true
+    @AppStorage("soundAlertName") private var soundAlertName = "Glass"
+    @AppStorage("soundAlertVolume") private var soundAlertVolume = 1.0
     @State private var cautionThreshold: Int
     @State private var warningThreshold: Int
     @State private var criticalThreshold: Int
@@ -2036,6 +2043,14 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Sound alerts") {
+                Toggle("Play sound when crossing thresholds", isOn: $soundAlertsEnabled)
+                soundAlertControls
+                    .disabled(!soundAlertsEnabled)
+                Text("Plays once each time a provider crosses one of the thresholds above.")
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Monitor") {
                 Picker(
                     "Monitor", selection: Binding(get: { notchScreenID }, set: onSelectNotchScreen)
@@ -2145,6 +2160,67 @@ struct SettingsView: View {
                 warningColor: NSColor(warningColor),
                 criticalColor: NSColor(criticalColor)
             ))
+    }
+
+    private var soundAlertControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                soundLevelControl(label: String(localized: "Caution"), isOn: $soundAlertCautionEnabled)
+                soundLevelControl(label: String(localized: "Warning"), isOn: $soundAlertWarningEnabled)
+                soundLevelControl(label: String(localized: "Critical"), isOn: $soundAlertCriticalEnabled)
+            }
+            Picker(
+                "Sound",
+                selection: Binding(
+                    get: { soundAlertName },
+                    set: { newValue in
+                        guard newValue == UsageSoundAlerter.customName else {
+                            soundAlertName = newValue
+                            return
+                        }
+                        pickCustomSound()
+                    }
+                )
+            ) {
+                ForEach(UsageSoundAlerter.systemSoundNames, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+                Text("Custom…").tag(UsageSoundAlerter.customName)
+            }
+            HStack {
+                Slider(value: $soundAlertVolume, in: 0...1)
+                Text("\(Int((soundAlertVolume * 100).rounded()))%")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .frame(width: 42, alignment: .trailing)
+            }
+            Button("Test") { UsageSoundAlerter.playTestSound() }
+        }
+    }
+
+    private func soundLevelControl(label: String, isOn: Binding<Bool>) -> some View {
+        GridRow {
+            Text(label)
+            Toggle("\(label) sound", isOn: isOn)
+                .labelsHidden()
+        }
+    }
+
+    /// Opens a file picker and copies the chosen audio file into Application Support as the
+    /// custom alert sound. Canceling leaves the current selection untouched.
+    private func pickCustomSound() {
+        try? FileManager.default.createDirectory(
+            at: UsageSoundAlerter.customSoundDirectory, withIntermediateDirectories: true)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.audio]
+        panel.directoryURL = UsageSoundAlerter.customSoundDirectory
+        guard panel.runModal() == .OK, let url = panel.url,
+            UsageSoundAlerter.importCustomSound(from: url)
+        else { return }
+        soundAlertName = UsageSoundAlerter.customName
     }
 
     /// A small colored status dot shown right after the provider name: green when connected
@@ -2413,7 +2489,7 @@ extension NSMenu {
     }
 }
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     let store = UsageStore(providers: ProviderRegistry.makeProviders())
     var statusItem: NSStatusItem!
     var popover: NSPopover!
@@ -2427,6 +2503,7 @@ extension NSMenu {
     let pairing = PairingManager()
     private let updater = AppUpdater()
     private let localPWAServer = LocalPWAServer()
+    let soundAlerter = UsageSoundAlerter()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         migrateDisplayModeIfNeeded()
@@ -2447,6 +2524,7 @@ extension NSMenu {
         observation = store.$providers.sink { [weak self] providers in
             self?.updateStatusItem(providers)
             guard let self else { return }
+            self.soundAlerter.process(providers)
             self.ntfyPublisher.publish(providers, secret: self.pairing.currentSecret)
         }
         enabledProvidersObservation = store.$enabledProviderKinds.sink { [weak self] _ in
@@ -2539,6 +2617,7 @@ extension NSMenu {
         saveMenuBarAlertColor(settings.cautionColor, forKey: "menuBarCautionColor")
         saveMenuBarAlertColor(settings.warningColor, forKey: "menuBarWarningColor")
         saveMenuBarAlertColor(settings.criticalColor, forKey: "menuBarCriticalColor")
+        soundAlerter.settingsDidChange()
         updateStatusItem(store.providers)
         sidebarWindows.forEach { $0.contentView = makeHostingView() }
         popover?.contentViewController = NSHostingController(
@@ -2659,6 +2738,10 @@ extension NSMenu {
             keyEquivalent: "", symbolName: "menubar.rectangle")
         menuBarItem.state = showsMenuBar ? .on : .off
         menuBarItem.isEnabled = !(showsMenuBar && !showsNotch)
+        let soundItem = menu.addItem(
+            withTitle: String(localized: "Sound Alerts"), action: nil, keyEquivalent: "",
+            symbolName: "speaker.wave.2")
+        soundItem.submenu = buildSoundAlertsMenu()
         menu.addItem(.separator())
         menu.addItem(
             withTitle: String(localized: "Settings…"), action: #selector(openSettings), keyEquivalent: ",",
@@ -2677,6 +2760,56 @@ extension NSMenu {
                 updater
         }
         return menu
+    }
+
+    private func buildSoundAlertsMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+        let onItem = menu.addItem(
+            withTitle: String(localized: "On"), action: #selector(soundAlertsOn), keyEquivalent: "")
+        onItem.target = self
+        let muteHourItem = menu.addItem(
+            withTitle: String(localized: "Mute 1 Hour"), action: #selector(muteSoundAlertsForOneHour),
+            keyEquivalent: "")
+        muteHourItem.target = self
+        let muteTomorrowItem = menu.addItem(
+            withTitle: String(localized: "Mute Until Tomorrow"),
+            action: #selector(muteSoundAlertsUntilTomorrow), keyEquivalent: "")
+        muteTomorrowItem.target = self
+        updateSoundAlertsMenuStates(menu)
+        return menu
+    }
+
+    private func updateSoundAlertsMenuStates(_ menu: NSMenu) {
+        let muted = soundAlerter.isMuted
+        for item in menu.items {
+            switch item.action {
+            case #selector(soundAlertsOn): item.state = muted ? .off : .on
+            case #selector(muteSoundAlertsForOneHour), #selector(muteSoundAlertsUntilTomorrow):
+                item.state = muted ? .on : .off
+            default: break
+            }
+        }
+    }
+
+    /// Refreshes the Sound Alerts submenu checkmarks right before the status item menu
+    /// opens, so mute state picked in Settings or the menu is always current.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        updateSoundAlertsMenuStates(menu)
+    }
+
+    @objc private func soundAlertsOn() {
+        soundAlerter.clearMute()
+    }
+
+    @objc private func muteSoundAlertsForOneHour() {
+        soundAlerter.mute(untilInterval: Date().timeIntervalSince1970 + 60 * 60)
+    }
+
+    @objc private func muteSoundAlertsUntilTomorrow() {
+        let tomorrow = Calendar.current.date(
+            byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date()))
+        soundAlerter.mute(untilInterval: (tomorrow ?? Date()).timeIntervalSince1970)
     }
 
     private func showNotchMenu(at windowPoint: NSPoint) {
