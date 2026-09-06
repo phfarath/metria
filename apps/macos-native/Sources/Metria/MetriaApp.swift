@@ -7,6 +7,7 @@ import MetriaCore
 import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
+import UserNotifications
 
 /// Stores the pairing master secret in the macOS Keychain. The secret never leaves the
 /// Mac in plaintext: the PWA only ever receives it via the QR code or 12-word phrase,
@@ -1691,6 +1692,14 @@ struct SettingsView: View {
     @AppStorage("soundAlertCriticalEnabled") private var soundAlertCriticalEnabled = true
     @AppStorage("soundAlertName") private var soundAlertName = "Glass"
     @AppStorage("soundAlertVolume") private var soundAlertVolume = 1.0
+    @AppStorage("usageNotificationsEnabled") private var usageNotificationsEnabled = false
+    @AppStorage("usageNotificationsCautionEnabled")
+    private var usageNotificationsCautionEnabled = true
+    @AppStorage("usageNotificationsWarningEnabled")
+    private var usageNotificationsWarningEnabled = true
+    @AppStorage("usageNotificationsCriticalEnabled")
+    private var usageNotificationsCriticalEnabled = true
+    @State private var notificationsBlocked = false
     @State private var cautionThreshold: Int
     @State private var warningThreshold: Int
     @State private var criticalThreshold: Int
@@ -1698,6 +1707,7 @@ struct SettingsView: View {
     @State private var warningColor: Color
     @State private var criticalColor: Color
     let onChangeMenuBarAlertSettings: (MenuBarAlertSettings) -> Void
+    let usageNotifier: UsageNotifier
     @State private var sidebarOpacity: Double
     let onChangeSidebarOpacity: (Double) -> Void
     @State private var launchAtLoginEnabled: Bool
@@ -1748,6 +1758,7 @@ struct SettingsView: View {
         onChangeMenuBarProviderNames: @escaping (Bool) -> Void,
         menuBarAlertSettings: MenuBarAlertSettings,
         onChangeMenuBarAlertSettings: @escaping (MenuBarAlertSettings) -> Void,
+        usageNotifier: UsageNotifier,
         sidebarOpacity: Double,
         onChangeSidebarOpacity: @escaping (Double) -> Void,
         launchAtLoginEnabled: Bool,
@@ -1791,6 +1802,7 @@ struct SettingsView: View {
         _warningColor = State(initialValue: Color(nsColor: menuBarAlertSettings.warningColor))
         _criticalColor = State(initialValue: Color(nsColor: menuBarAlertSettings.criticalColor))
         self.onChangeMenuBarAlertSettings = onChangeMenuBarAlertSettings
+        self.usageNotifier = usageNotifier
         _sidebarOpacity = State(initialValue: sidebarOpacity)
         self.onChangeSidebarOpacity = onChangeSidebarOpacity
         _launchAtLoginEnabled = State(initialValue: launchAtLoginEnabled)
@@ -2051,6 +2063,25 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Notifications") {
+                Toggle(
+                    "Show notifications when crossing thresholds",
+                    isOn: $usageNotificationsEnabled
+                )
+                .onChange(of: usageNotificationsEnabled) { enabled in
+                    Task { await refreshNotificationAuthorization(requestingIfNeeded: enabled) }
+                }
+                .task { await refreshNotificationAuthorization(requestingIfNeeded: false) }
+                notificationLevelControls
+                    .disabled(!usageNotificationsEnabled)
+                if notificationsBlocked {
+                    Text("Notifications are blocked for Metria in System Settings.")
+                        .foregroundStyle(.secondary)
+                }
+                Text("Notifications follow the system Focus and Do Not Disturb state.")
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Monitor") {
                 Picker(
                     "Monitor", selection: Binding(get: { notchScreenID }, set: onSelectNotchScreen)
@@ -2221,6 +2252,39 @@ struct SettingsView: View {
             UsageSoundAlerter.importCustomSound(from: url)
         else { return }
         soundAlertName = UsageSoundAlerter.customName
+    }
+
+    private var notificationLevelControls: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+            notificationLevelControl(
+                label: String(localized: "Caution"), isOn: $usageNotificationsCautionEnabled)
+            notificationLevelControl(
+                label: String(localized: "Warning"), isOn: $usageNotificationsWarningEnabled)
+            notificationLevelControl(
+                label: String(localized: "Critical"), isOn: $usageNotificationsCriticalEnabled)
+        }
+    }
+
+    private func notificationLevelControl(label: String, isOn: Binding<Bool>) -> some View {
+        GridRow {
+            Text(label)
+            Toggle("\(label) notifications", isOn: isOn)
+                .labelsHidden()
+        }
+    }
+
+    /// Requests permission the first time the feature is switched on and mirrors a denial
+    /// from System Settings back into the toggle and the hint text.
+    @MainActor
+    private func refreshNotificationAuthorization(requestingIfNeeded: Bool) async {
+        if requestingIfNeeded {
+            await usageNotifier.requestAuthorizationIfNeeded()
+        }
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        notificationsBlocked = settings.authorizationStatus == .denied
+        if notificationsBlocked {
+            usageNotificationsEnabled = false
+        }
     }
 
     /// A small colored status dot shown right after the provider name: green when connected
@@ -2504,6 +2568,7 @@ extension NSMenu {
     private let updater = AppUpdater()
     private let localPWAServer = LocalPWAServer()
     let soundAlerter = UsageSoundAlerter()
+    let usageNotifier = UsageNotifier()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         migrateDisplayModeIfNeeded()
@@ -2525,6 +2590,7 @@ extension NSMenu {
             self?.updateStatusItem(providers)
             guard let self else { return }
             self.soundAlerter.process(providers)
+            self.usageNotifier.process(providers)
             self.ntfyPublisher.publish(providers, secret: self.pairing.currentSecret)
         }
         enabledProvidersObservation = store.$enabledProviderKinds.sink { [weak self] _ in
@@ -2618,6 +2684,7 @@ extension NSMenu {
         saveMenuBarAlertColor(settings.warningColor, forKey: "menuBarWarningColor")
         saveMenuBarAlertColor(settings.criticalColor, forKey: "menuBarCriticalColor")
         soundAlerter.settingsDidChange()
+        usageNotifier.settingsDidChange()
         updateStatusItem(store.providers)
         sidebarWindows.forEach { $0.contentView = makeHostingView() }
         popover?.contentViewController = NSHostingController(
@@ -3697,6 +3764,7 @@ extension NSMenu {
                 onChangeMenuBarAlertSettings: { [weak self] settings in
                     self?.setMenuBarAlertSettings(settings)
                 },
+                usageNotifier: usageNotifier,
                 sidebarOpacity: sidebarOpacity,
                 onChangeSidebarOpacity: { [weak self] opacity in self?.setSidebarOpacity(opacity) },
                 launchAtLoginEnabled: LaunchAtLoginManager.isEnabled,

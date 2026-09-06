@@ -15,9 +15,8 @@ import MetriaCore
 /// - "soundAlertMutedUntil" (Double, default `0`): epoch seconds the mute lasts until;
 ///   0 means not muted.
 ///
-/// Thresholds come from the shared menu bar alert keys ("menuBarCautionThreshold",
-/// "menuBarWarningThreshold", "menuBarCriticalThreshold") with the same fallbacks as
-/// `MenuBarAlertSettings.default`.
+/// Crossing detection and thresholds are shared with the notifications feature through
+/// `ThresholdCrossingTracker`; this class only owns playback and its suppressors.
 @MainActor
 final class UsageSoundAlerter {
     static let systemSoundNames = ["Glass", "Ping", "Submarine"]
@@ -28,53 +27,18 @@ final class UsageSoundAlerter {
     private static let volumeKey = "soundAlertVolume"
     private static let mutedUntilKey = "soundAlertMutedUntil"
 
-    /// Provider + level pair that has already announced itself; cleared when the percent
-    /// falls back below that level's threshold, so a window reset can alert again.
+    /// Provider + level pair used as the key for deferred sounds. The fired markers
+    /// themselves live in the tracker.
     private struct FiredKey: Hashable {
         let kind: ProviderKind
         let level: Level
     }
 
-    private enum Level: Int, CaseIterable {
-        case caution
-        case warning
-        case critical
+    /// The shared crossing levels. Thresholds live in `ThresholdCrossingTracker.Level`;
+    /// the per-level sound switches are added in the extension below.
+    private typealias Level = ThresholdCrossingTracker.Level
 
-        var thresholdKey: String {
-            switch self {
-            case .caution: return "menuBarCautionThreshold"
-            case .warning: return "menuBarWarningThreshold"
-            case .critical: return "menuBarCriticalThreshold"
-            }
-        }
-
-        var fallbackThreshold: Int {
-            switch self {
-            case .caution: return MenuBarAlertSettings.default.cautionThreshold
-            case .warning: return MenuBarAlertSettings.default.warningThreshold
-            case .critical: return MenuBarAlertSettings.default.criticalThreshold
-            }
-        }
-
-        var enabledKey: String {
-            switch self {
-            case .caution: return "soundAlertCautionEnabled"
-            case .warning: return "soundAlertWarningEnabled"
-            case .critical: return "soundAlertCriticalEnabled"
-            }
-        }
-
-        var isEnabled: Bool {
-            UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
-        }
-
-        var threshold: Double {
-            Double(UserDefaults.standard.object(forKey: thresholdKey) as? Int ?? fallbackThreshold)
-        }
-    }
-
-    private var lastPercent: [ProviderKind: Double] = [:]
-    private var fired: Set<FiredKey> = []
+    private let tracker = ThresholdCrossingTracker()
     /// Crossings that happened while muted or with an inactive session, waiting for the
     /// first tick on which they may sound.
     private var pending: Set<FiredKey> = []
@@ -112,32 +76,20 @@ final class UsageSoundAlerter {
     /// feature or the level is disabled are discarded.
     func process(_ providers: [ProviderUsage]) {
         var candidates: [(kind: ProviderKind, level: Level)] = []
-        var current: [ProviderKind: Double] = [:]
-        for provider in providers {
-            guard let percent = provider.primary?.percent else {
-                lastPercent.removeValue(forKey: provider.kind)
-                continue
-            }
-            current[provider.kind] = percent
-            // A provider never seen before is baseline only: never beep on arrival.
-            guard let previous = lastPercent[provider.kind] else { continue }
-            for level in Level.allCases {
-                let key = FiredKey(kind: provider.kind, level: level)
-                if previous < level.threshold && percent >= level.threshold {
-                    if !fired.contains(key) {
-                        fired.insert(key)
-                        if level.isEnabled { candidates.append((provider.kind, level)) }
-                    }
-                } else if previous >= level.threshold && percent < level.threshold {
-                    // Re-arm: the level may fire again on the next upward crossing. A
-                    // deferred alert for this level is stale now — the reset itself told
-                    // that story — so drop it along with the fired marker.
-                    fired.remove(key)
-                    pending.remove(key)
-                }
-            }
+        for crossing in tracker.update(providers) where crossing.level.isSoundEnabled {
+            candidates.append((crossing.kind, crossing.level))
         }
-        lastPercent = current
+        // The tracker re-arms a level when the percent falls back below its threshold; a
+        // deferred alert for that level is stale now — the reset itself told that story —
+        // so drop it too. A provider without a percent keeps its pending alert.
+        var currentPercents: [ProviderKind: Double] = [:]
+        for provider in providers {
+            if let percent = provider.primary?.percent { currentPercents[provider.kind] = percent }
+        }
+        pending = pending.filter { key in
+            guard let percent = currentPercents[key.kind] else { return true }
+            return percent >= key.level.threshold
+        }
 
         guard isEnabled else {
             pending.removeAll()
@@ -167,7 +119,7 @@ final class UsageSoundAlerter {
 
     /// Called when thresholds change in Settings so every level can fire again.
     func settingsDidChange() {
-        fired.removeAll()
+        tracker.reset()
         pending.removeAll()
     }
 
@@ -199,7 +151,7 @@ final class UsageSoundAlerter {
     private func play(level: Level) {
         guard
             UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? false,
-            UserDefaults.standard.object(forKey: level.enabledKey) as? Bool ?? true,
+            level.isSoundEnabled,
             isSessionActive,
             !isMuted,
             let sound = Self.makeSound()
@@ -269,5 +221,21 @@ final class UsageSoundAlerter {
         } catch {
             return false
         }
+    }
+}
+
+/// Sound switches for the shared crossing levels. Threshold values live in
+/// `ThresholdCrossingTracker.Level`; only the per-level sound toggles belong here.
+private extension ThresholdCrossingTracker.Level {
+    var soundEnabledKey: String {
+        switch self {
+        case .caution: return "soundAlertCautionEnabled"
+        case .warning: return "soundAlertWarningEnabled"
+        case .critical: return "soundAlertCriticalEnabled"
+        }
+    }
+
+    var isSoundEnabled: Bool {
+        UserDefaults.standard.object(forKey: soundEnabledKey) as? Bool ?? true
     }
 }
